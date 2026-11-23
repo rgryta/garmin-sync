@@ -3,6 +3,8 @@
 //! and per-second samples, and refreshes a trailing window of each daily metric. Backfill
 //! walks the whole history under a daily request budget.
 
+use std::time::{Duration, Instant};
+
 use chrono::{NaiveDate, TimeDelta, Utc};
 use garmin_client::{ClientError, Session};
 use garmin_core::store::{activities, daily, raw, samples, session as session_store, sync};
@@ -32,8 +34,12 @@ pub const DAILY_KINDS: &[&str] = &[
 ];
 /// How many trailing days each poll re-fetches (Garmin recomputes recent days).
 const POLL_TRAILING_DAYS: i64 = 3;
-/// How far back backfill reaches when no floor is configured.
+/// How far back backfill reaches when no activity says where the history starts.
 const DEFAULT_FLOOR_YEARS: i64 = 20;
+/// What backfill leaves of the day's budget, so the poll still runs on a busy day.
+pub const POLL_RESERVE: i64 = 250;
+/// How often a pass re-fetches the trailing window of daily metrics (12 kinds x 3 days).
+const DAILY_POLL_EVERY: Duration = Duration::from_secs(4 * 60 * 60);
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
@@ -82,6 +88,7 @@ pub struct Runner<S> {
     budget: i64,
     source: S,
     session: Session,
+    daily_polled: Option<Instant>,
 }
 
 impl<S: Source> Runner<S> {
@@ -92,11 +99,16 @@ impl<S: Source> Runner<S> {
             budget,
             source,
             session,
+            daily_polled: None,
         }
     }
 
     pub fn session(&self) -> &Session {
         &self.session
+    }
+
+    pub fn source(&self) -> &S {
+        &self.source
     }
 
     /// Refresh the Bearer only when it is missing or near expiry, persisting the rolled
@@ -119,8 +131,24 @@ impl<S: Source> Runner<S> {
     }
 
     /// Spend one request's budget; false when the day's ceiling is reached.
-    async fn budget(&self) -> Result<bool, RunError> {
-        Ok(sync::take_budget(&self.pool, LOOP, 1, self.budget).await?)
+    async fn budget(&self, ceiling: i64) -> Result<bool, RunError> {
+        Ok(sync::take_budget(&self.pool, LOOP, 1, ceiling).await?)
+    }
+
+    /// The part of the day's budget backfill may spend.
+    fn backfill_ceiling(&self) -> i64 {
+        (self.budget - POLL_RESERVE).max(0)
+    }
+
+    /// Where backfill stops: the day before the oldest activity, since a watch records
+    /// nothing before it was worn. Without activities, a fixed number of years back.
+    async fn floor(&self) -> Result<NaiveDate, RunError> {
+        Ok(match activities::oldest_start(&self.pool).await? {
+            Some(start) => start.date_naive() - TimeDelta::days(1),
+            None => {
+                Utc::now().date_naive() - chrono::Months::new((DEFAULT_FLOOR_YEARS * 12) as u32)
+            }
+        })
     }
 
     /// Upsert an activity and, if its file is not stored yet, fetch the FIT (-> blob +
@@ -134,7 +162,7 @@ impl<S: Source> Runner<S> {
         activities::upsert(&mut conn, &act).await?;
         let mut sample_rows = 0u64;
         if !activities::has_file(&self.pool, act.id).await? {
-            if !self.budget().await? {
+            if !self.budget(self.budget).await? {
                 return Ok(0);
             }
             match self.source.activity_file(&self.session, act.id).await {
@@ -163,8 +191,13 @@ impl<S: Source> Runner<S> {
     }
 
     /// Fetch and store one daily kind for one date.
-    async fn ingest_daily(&mut self, kind: &str, date: NaiveDate) -> Result<bool, RunError> {
-        if !self.budget().await? {
+    async fn ingest_daily(
+        &mut self,
+        kind: &str,
+        date: NaiveDate,
+        ceiling: i64,
+    ) -> Result<bool, RunError> {
+        if !self.budget(ceiling).await? {
             return Ok(false);
         }
         match self
@@ -200,25 +233,35 @@ impl<S: Source> Runner<S> {
             report.samples += self.ingest_activity(summary).await?;
             report.activities += 1;
         }
-        let today = Utc::now().date_naive();
-        for kind in DAILY_KINDS {
-            for back in 0..POLL_TRAILING_DAYS {
-                if self
-                    .ingest_daily(kind, today - TimeDelta::days(back))
-                    .await?
-                {
-                    report.daily += 1;
+        // Daily metrics settle over hours, so the window is re-read every few hours, not
+        // on every pass: 36 requests a pass would be ~3,500 a day at a 15-minute poll.
+        if self
+            .daily_polled
+            .is_none_or(|at| at.elapsed() >= DAILY_POLL_EVERY)
+        {
+            let today = Utc::now().date_naive();
+            for kind in DAILY_KINDS {
+                for back in 0..POLL_TRAILING_DAYS {
+                    if self
+                        .ingest_daily(kind, today - TimeDelta::days(back), self.budget)
+                        .await?
+                    {
+                        report.daily += 1;
+                    }
                 }
             }
+            self.daily_polled = Some(Instant::now());
         }
         sync::record_ok(&self.pool, LOOP).await?;
         Ok(report)
     }
 
-    /// One backfill step under the budget. Walks the activity list older and older
-    /// (cursor = next page start), then each daily kind back day by day to the floor.
-    /// The caller loops on [`BackfillStep::Progressed`] (the day's budget is the throttle,
-    /// not the caller's poll interval) and waits on [`BackfillStep::BudgetSpent`].
+    /// One backfill step under the budget less [`POLL_RESERVE`]. Walks the activity list
+    /// older and older (cursor = next page start), then the daily kinds back day by day to
+    /// the floor, always the kind whose cursor is newest: the kinds move back together, so
+    /// recent years are whole for every kind before any old ones are read.
+    /// The caller paces [`BackfillStep::Progressed`] and waits on
+    /// [`BackfillStep::BudgetSpent`].
     pub async fn backfill_step(&mut self) -> Result<BackfillStep, RunError> {
         if sync::all_backfill_done(&self.pool, &all_kinds()).await? {
             return Ok(BackfillStep::Done);
@@ -229,7 +272,7 @@ impl<S: Source> Runner<S> {
             .await?
             .unwrap_or_default();
         if !done {
-            if !self.budget().await? {
+            if !self.budget(self.backfill_ceiling()).await? {
                 return Ok(BackfillStep::BudgetSpent);
             }
             let start: i64 = cur.parse().unwrap_or(0);
@@ -250,9 +293,9 @@ impl<S: Source> Runner<S> {
             }
             return Ok(BackfillStep::Progressed);
         }
-        // Then each daily kind, oldest-unfilled date backwards.
-        let floor =
-            Utc::now().date_naive() - chrono::Months::new((DEFAULT_FLOOR_YEARS * 12) as u32);
+        // Then the daily kinds, the one with the newest cursor first.
+        let floor = self.floor().await?;
+        let mut pick: Option<(&str, NaiveDate)> = None;
         for kind in DAILY_KINDS {
             let (c, kdone) = sync::cursor_get(&self.pool, kind)
                 .await?
@@ -267,24 +310,27 @@ impl<S: Source> Runner<S> {
                 sync::cursor_set(&self.pool, kind, &next.to_string(), true).await?;
                 continue;
             }
-            if !self.budget().await? {
-                return Ok(BackfillStep::BudgetSpent);
+            if pick.is_none_or(|(_, newest)| next > newest) {
+                pick = Some((kind, next));
             }
-            self.ingest_daily(kind, next).await?;
-            sync::cursor_set(
-                &self.pool,
-                kind,
-                &(next - TimeDelta::days(1)).to_string(),
-                false,
-            )
-            .await?;
-            return Ok(BackfillStep::Progressed);
         }
-        if sync::all_backfill_done(&self.pool, &all_kinds()).await? {
-            Ok(BackfillStep::Done)
-        } else {
-            Ok(BackfillStep::Progressed)
+        let Some((kind, next)) = pick else {
+            return Ok(BackfillStep::Done);
+        };
+        if !self
+            .ingest_daily(kind, next, self.backfill_ceiling())
+            .await?
+        {
+            return Ok(BackfillStep::BudgetSpent);
         }
+        sync::cursor_set(
+            &self.pool,
+            kind,
+            &(next - TimeDelta::days(1)).to_string(),
+            false,
+        )
+        .await?;
+        Ok(BackfillStep::Progressed)
     }
 }
 

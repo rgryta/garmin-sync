@@ -89,6 +89,13 @@ pub async fn newest_start(pool: &PgPool) -> sqlx::Result<Option<DateTime<Utc>>> 
         .await
 }
 
+/// The oldest activity's start: where the account's history begins.
+pub async fn oldest_start(pool: &PgPool) -> sqlx::Result<Option<DateTime<Utc>>> {
+    sqlx::query_scalar("SELECT min(start_ts) FROM activity")
+        .fetch_one(pool)
+        .await
+}
+
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct ActivityRow {
     pub id: i64,

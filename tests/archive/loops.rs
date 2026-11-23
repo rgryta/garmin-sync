@@ -4,7 +4,7 @@
 
 use chrono::{TimeDelta, Utc};
 use garmin_client::{ClientError, Session};
-use garmin_ingest::runner::Runner;
+use garmin_ingest::runner::{BackfillStep, Runner};
 use garmin_ingest::source::Source;
 use serde_json::{Value, json};
 
@@ -67,6 +67,7 @@ struct Fake {
     activities: Vec<Value>,
     bad_fit: bool,
     refreshed: std::sync::Mutex<bool>,
+    daily_calls: std::sync::Mutex<Vec<(String, String)>>,
 }
 
 impl Source for Fake {
@@ -99,7 +100,11 @@ impl Source for Fake {
     async fn activity_file(&self, _s: &Session, _id: i64) -> Result<Vec<u8>, ClientError> {
         Ok(fit(self.bad_fit))
     }
-    async fn daily(&self, _s: &Session, _kind: &str, _date: &str) -> Result<Value, ClientError> {
+    async fn daily(&self, _s: &Session, kind: &str, date: &str) -> Result<Value, ClientError> {
+        self.daily_calls
+            .lock()
+            .unwrap()
+            .push((kind.to_owned(), date.to_owned()));
         Ok(json!({"ok": true}))
     }
 }
@@ -107,6 +112,101 @@ impl Source for Fake {
 fn act(id: i64) -> Value {
     json!({"activityId": id, "startTimeGMT": "2026-03-01 08:00:00", "activityType": {"typeKey": "running"}})
 }
+
+/// An activity that started `days` days ago.
+fn act_days_ago(id: i64, days: i64) -> Value {
+    let start = (Utc::now() - TimeDelta::days(days)).format("%Y-%m-%d 08:00:00");
+    json!({"activityId": id, "startTimeGMT": start.to_string(), "activityType": {"typeKey": "running"}})
+}
+
+/// Step backfill until it stops progressing; returns how it stopped.
+async fn backfill_until_stopped(runner: &mut Runner<Fake>) -> BackfillStep {
+    loop {
+        match runner.backfill_step().await.unwrap() {
+            BackfillStep::Progressed => continue,
+            stopped => return stopped,
+        }
+    }
+}
+
+db_test!(
+    backfill_moves_the_kinds_back_together_and_stops_at_the_first_activity,
+    |f| {
+        // History starts 5 days ago: the floor is the day before, so 4 days per kind.
+        let fake = Fake {
+            activities: vec![act_days_ago(1, 5)],
+            ..Default::default()
+        };
+        let mut runner = Runner::new(
+            f.pool.clone(),
+            "owner".into(),
+            2000,
+            fake,
+            seed_session(false),
+        );
+        assert_eq!(
+            backfill_until_stopped(&mut runner).await,
+            BackfillStep::Done
+        );
+
+        let calls = runner.source().daily_calls.lock().unwrap().clone();
+        let kinds = garmin_ingest::runner::DAILY_KINDS.len();
+        assert_eq!(calls.len(), kinds * 4, "nothing before the floor is asked");
+        let today = Utc::now().date_naive();
+        let floor = today - TimeDelta::days(6);
+        assert!(
+            calls
+                .iter()
+                .all(|(_, d)| d.parse::<chrono::NaiveDate>().unwrap() >= floor)
+        );
+        // Every kind reads a date before any kind moves to the day before.
+        let first_day: Vec<_> = calls[..kinds].iter().map(|(_, d)| d.as_str()).collect();
+        assert!(first_day.iter().all(|d| *d == first_day[0]));
+    }
+);
+
+db_test!(
+    backfill_leaves_the_poll_reserve_and_the_poll_spends_it,
+    |f| {
+        use garmin_ingest::runner::POLL_RESERVE;
+        let fake = Fake {
+            activities: vec![act_days_ago(1, 400)],
+            ..Default::default()
+        };
+        let budget = POLL_RESERVE + 10;
+        let mut runner = Runner::new(
+            f.pool.clone(),
+            "owner".into(),
+            budget,
+            fake,
+            seed_session(false),
+        );
+        assert_eq!(
+            backfill_until_stopped(&mut runner).await,
+            BackfillStep::BudgetSpent
+        );
+        let spent: i64 =
+            sqlx::query_scalar("SELECT budget_spent FROM sync_state WHERE loop = 'sync'")
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        assert_eq!(spent, 10, "backfill stops at the budget less the reserve");
+        let report = runner.pass().await.unwrap();
+        assert!(report.daily > 0, "the poll still reads the daily window");
+    }
+);
+
+db_test!(the_daily_window_is_not_re_read_on_every_pass, |f| {
+    let mut runner = Runner::new(
+        f.pool.clone(),
+        "owner".into(),
+        2000,
+        Fake::default(),
+        seed_session(false),
+    );
+    assert!(runner.pass().await.unwrap().daily > 0);
+    assert_eq!(runner.pass().await.unwrap().daily, 0);
+});
 
 db_test!(a_rolled_refresh_token_is_saved_before_use, |f| {
     let fake = Fake {
