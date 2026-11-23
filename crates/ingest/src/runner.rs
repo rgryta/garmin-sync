@@ -127,15 +127,18 @@ impl<S: Source> Runner<S> {
             }
             match self.source.activity_file(&self.session, act.id).await {
                 Ok(bytes) => {
-                    let sha = format!("{:x}", Sha256::digest(&bytes));
-                    activities::save_file(&mut conn, act.id, "fit", &bytes, &sha).await?;
-                    match fit::parse_samples(&bytes) {
-                        Ok(samples) => {
-                            sample_rows =
-                                samples::insert_batch(&mut conn, act.id, &samples).await?;
-                        }
-                        Err(e) => {
-                            tracing::warn!(activity = act.id, %e, "kept the FIT, skipped samples")
+                    let (format, stored) = fit::unwrap_download(bytes);
+                    let sha = format!("{:x}", Sha256::digest(&stored));
+                    activities::save_file(&mut conn, act.id, &format, &stored, &sha).await?;
+                    if format == "fit" {
+                        match fit::parse_samples(&stored) {
+                            Ok(samples) => {
+                                sample_rows =
+                                    samples::insert_batch(&mut conn, act.id, &samples).await?;
+                            }
+                            Err(e) => {
+                                tracing::warn!(activity = act.id, %e, "kept the FIT, skipped samples")
+                            }
                         }
                     }
                 }

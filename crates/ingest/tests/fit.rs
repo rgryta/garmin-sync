@@ -78,3 +78,36 @@ fn a_truncated_fit_is_an_error_not_a_panic() {
     let err = parse_samples(&[0x0E, 0x20, 0x00]).unwrap_err();
     assert!(!err.to_string().is_empty());
 }
+
+/// Build a zip holding one entry.
+fn zip_with(name: &str, body: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    w.start_file(name, zip::write::SimpleFileOptions::default())
+        .unwrap();
+    w.write_all(body).unwrap();
+    w.finish().unwrap().into_inner()
+}
+
+#[test]
+fn a_zip_download_yields_the_inner_fit() {
+    let fit = build_fit();
+    let (format, stored) =
+        garmin_ingest::fit::unwrap_download(zip_with("12345_ACTIVITY.fit", &fit));
+    assert_eq!(format, "fit");
+    assert_eq!(parse_samples(&stored).unwrap().len(), 2);
+}
+
+#[test]
+fn a_bare_fit_passes_through() {
+    let fit = build_fit();
+    let (format, stored) = garmin_ingest::fit::unwrap_download(fit.clone());
+    assert_eq!(format, "fit");
+    assert_eq!(stored, fit);
+}
+
+#[test]
+fn a_zip_without_a_fit_is_kept_as_zip() {
+    let (format, _) = garmin_ingest::fit::unwrap_download(zip_with("track.gpx", b"<gpx/>"));
+    assert_eq!(format, "zip");
+}

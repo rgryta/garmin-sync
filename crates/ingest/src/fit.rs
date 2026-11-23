@@ -32,6 +32,30 @@ fn num(v: &FitValue) -> Option<f64> {
     }
 }
 
+/// Garmin's download endpoint wraps the original file in a zip. Return the format to store
+/// and the bytes to store: the inner `.fit` when the download is a zip containing one
+/// (parseable into samples), the raw zip (format `zip`) when it holds no FIT, or the input
+/// unchanged when it is already a bare FIT.
+pub fn unwrap_download(bytes: Vec<u8>) -> (String, Vec<u8>) {
+    if !bytes.starts_with(b"PK\x03\x04") {
+        return ("fit".into(), bytes);
+    }
+    if let Ok(mut zip) = zip::ZipArchive::new(std::io::Cursor::new(&bytes)) {
+        for i in 0..zip.len() {
+            let Ok(mut entry) = zip.by_index(i) else {
+                continue;
+            };
+            if entry.name().to_lowercase().ends_with(".fit") {
+                let mut out = Vec::new();
+                if std::io::copy(&mut entry, &mut out).is_ok() {
+                    return ("fit".into(), out);
+                }
+            }
+        }
+    }
+    ("zip".into(), bytes)
+}
+
 /// Parse the `record` messages into samples. Known fields get columns; everything else is
 /// kept in `extra` so nothing the device recorded is lost.
 pub fn parse_samples(bytes: &[u8]) -> Result<Vec<Sample>, FitError> {
