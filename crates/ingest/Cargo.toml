@@ -16,11 +16,11 @@ path = "src/bin/garmin-ingest.rs"
 [dependencies]
 chrono.workspace = true
 garmin-client = { path = "../garmin" }
-fitparser = "0.9.0"
-zip = { version = "2.2.0", default-features = false, features = ["deflate"] }
+fitparser = "0.12.0"
+zip = { version = "9.8.1", default-features = false, features = ["deflate"] }
 garmin-core.workspace = true
 serde_json.workspace = true
-sha2 = "0.10.9"
+sha2 = "0.11.1"
 sqlx.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["time", "sync"] }
