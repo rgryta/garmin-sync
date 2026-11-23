@@ -16,6 +16,7 @@ path = "src/bin/garmin-ingest.rs"
 [dependencies]
 chrono.workspace = true
 garmin-client = { path = "../garmin" }
+fitparser = "0.9.0"
 garmin-core.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
