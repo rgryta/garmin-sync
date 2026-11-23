@@ -100,8 +100,8 @@ pub struct DayArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MetricArgs {
-    /// A daily kind: summary, sleep, hrv, steps, body_battery, respiration, spo2,
-    /// training_readiness, vo2max, weight, ...
+    /// A daily kind: summary, sleep, hrv, heart_rate, stress, steps, body_battery,
+    /// respiration, spo2, training_readiness, vo2max, weight, ...
     pub kind: String,
     pub after: Option<String>,
     pub before: Option<String>,

@@ -6,6 +6,7 @@ use serde_json::Value;
 #[allow(async_fn_in_trait)]
 pub trait Source {
     async fn refresh(&self, s: &Session) -> Result<Session, ClientError>;
+    async fn user_id(&self, s: &Session) -> Result<String, ClientError>;
     async fn activities(
         &self,
         s: &Session,
@@ -20,6 +21,9 @@ pub trait Source {
 impl Source for Client {
     async fn refresh(&self, s: &Session) -> Result<Session, ClientError> {
         Client::refresh(self, s).await
+    }
+    async fn user_id(&self, s: &Session) -> Result<String, ClientError> {
+        Client::user_id(self, s).await
     }
     async fn activities(
         &self,

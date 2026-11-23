@@ -42,15 +42,23 @@ pub const ALLOWED_SERVICES: &[&str] = &[
 /// Daily kinds and their path templates. `{date}` is an ISO date; a few take a range as
 /// `{from}/{to}`. Confirmed/extended against the live API at deploy time.
 pub const DAILY_PATHS: &[(&str, &str)] = &[
-    ("summary", "usersummary-service/usersummary/daily/{date}"),
+    (
+        "summary",
+        "usersummary-service/usersummary/daily/{displayName}?calendarDate={date}",
+    ),
     (
         "sleep",
         "sleep-service/sleep/dailySleepData?nonSleepBufferMinutes=60&date={date}",
     ),
     ("hrv", "hrv-service/hrv/{date}"),
     (
+        "heart_rate",
+        "wellness-service/wellness/dailyHeartRate/{displayName}?date={date}",
+    ),
+    ("stress", "wellness-service/wellness/dailyStress/{date}"),
+    (
         "steps",
-        "wellness-service/wellness/dailySummaryChart/{date}",
+        "wellness-service/wellness/dailySummaryChart/{displayName}?date={date}",
     ),
     (
         "body_battery",
@@ -260,11 +268,30 @@ impl Client {
             .find(|(k, _)| *k == kind)
             .map(|(_, p)| *p)
             .ok_or_else(|| ClientError::NotAllowed(format!("daily kind {kind}")))?;
-        self.get_json(s, &template.replace("{date}", date)).await
+        let mut path = template.replace("{date}", date);
+        if path.contains("{displayName}") {
+            let dn = s.garmin_user_id.as_deref().ok_or_else(|| {
+                ClientError::Shape(format!(
+                    "daily kind {kind} needs a displayName but the session has none"
+                ))
+            })?;
+            path = path.replace("{displayName}", dn);
+        }
+        self.get_json(s, &path).await
     }
 
     pub async fn profile(&self, s: &Session) -> Result<Value, ClientError> {
         self.get_json(s, "userprofile-service/socialProfile").await
+    }
+
+    /// The account's `displayName` (a GUID), which some daily paths require.
+    pub async fn user_id(&self, s: &Session) -> Result<String, ClientError> {
+        self.profile(s)
+            .await?
+            .get("displayName")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| ClientError::Shape("socialProfile has no displayName".into()))
     }
     pub async fn devices(&self, s: &Session) -> Result<Value, ClientError> {
         self.get_json(s, "device-service/deviceregistration/devices")

@@ -78,6 +78,9 @@ impl Source for Fake {
             ..s.clone()
         })
     }
+    async fn user_id(&self, _s: &Session) -> Result<String, ClientError> {
+        Ok("display-guid".into())
+    }
     async fn activities(
         &self,
         _s: &Session,
@@ -128,6 +131,24 @@ db_test!(a_rolled_refresh_token_is_saved_before_use, |f| {
         Some("r1")
     );
     assert_eq!(runner.session().access_token, "a1");
+});
+
+db_test!(the_display_name_is_resolved_and_persisted_once, |f| {
+    let mut s = seed_session(false);
+    s.garmin_user_id = None;
+    let fake = Fake::default();
+    let mut runner = Runner::new(f.pool.clone(), "owner".into(), 2000, fake, s);
+    runner.pass().await.unwrap();
+    assert_eq!(runner.session().garmin_user_id.as_deref(), Some("display-guid"));
+    let stored: Value =
+        sqlx::query_scalar("SELECT session FROM ingest_session WHERE account_id = 'owner'")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        stored.get("garmin_user_id").and_then(|v| v.as_str()),
+        Some("display-guid")
+    );
 });
 
 db_test!(a_valid_token_is_not_refreshed, |f| {

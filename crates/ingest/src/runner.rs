@@ -20,6 +20,8 @@ pub const DAILY_KINDS: &[&str] = &[
     "summary",
     "sleep",
     "hrv",
+    "heart_rate",
+    "stress",
     "steps",
     "body_battery",
     "respiration",
@@ -88,13 +90,19 @@ impl<S: Source> Runner<S> {
     /// Refresh the Bearer only when it is missing or near expiry, persisting the rolled
     /// session (new refresh token) **before** any further request.
     async fn authenticate(&mut self) -> Result<(), RunError> {
-        if !self.session.needs_refresh(Utc::now()) {
-            return Ok(());
+        if self.session.needs_refresh(Utc::now()) {
+            let rotated = self.source.refresh(&self.session).await?;
+            let mut conn = self.pool.acquire().await?;
+            session_store::save(&mut conn, &self.account, &json!(rotated)).await?;
+            self.session = rotated;
         }
-        let rotated = self.source.refresh(&self.session).await?;
-        let mut conn = self.pool.acquire().await?;
-        session_store::save(&mut conn, &self.account, &json!(rotated)).await?;
-        self.session = rotated;
+        // Some daily paths need the account's displayName; resolve it once and persist.
+        if self.session.garmin_user_id.is_none() {
+            let id = self.source.user_id(&self.session).await?;
+            self.session.garmin_user_id = Some(id);
+            let mut conn = self.pool.acquire().await?;
+            session_store::save(&mut conn, &self.account, &json!(self.session)).await?;
+        }
         Ok(())
     }
 
