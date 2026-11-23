@@ -45,7 +45,10 @@ pub fn unwrap_download(bytes: Vec<u8>) -> (String, Vec<u8>) {
             let Ok(mut entry) = zip.by_index(i) else {
                 continue;
             };
-            if entry.name().to_lowercase().ends_with(".fit") {
+            if entry
+                .name()
+                .is_ok_and(|name| name.to_lowercase().ends_with(".fit"))
+            {
                 let mut out = Vec::new();
                 if std::io::copy(&mut entry, &mut out).is_ok() {
                     return ("fit".into(), out);

@@ -168,7 +168,10 @@ impl<S: Source> Runner<S> {
             match self.source.activity_file(&self.session, act.id).await {
                 Ok(bytes) => {
                     let (format, stored) = fit::unwrap_download(bytes);
-                    let sha = format!("{:x}", Sha256::digest(&stored));
+                    let sha: String = Sha256::digest(&stored)
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect();
                     activities::save_file(&mut conn, act.id, &format, &stored, &sha).await?;
                     if format == "fit" {
                         match fit::parse_samples(&stored) {
