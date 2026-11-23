@@ -1,10 +1,12 @@
 //! The ingest daemon: `garmin-ingest`.
 //!
-//! It never does the interactive SSO login. It refreshes the seeded session, backfills
-//! the whole history under a daily budget, then polls. A rejected session is recorded and
-//! waited on; the process does not exit.
+//! It never does the interactive SSO login. It refreshes the seeded session, polls on
+//! every poll interval, and between polls backfills the whole history under a daily
+//! budget, spread over the day. A rejected session is recorded and waited on; the process
+//! does not exit.
 
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
 use garmin_client::Client;
 use garmin_core::db::{create_pool, ensure_schema};
@@ -92,34 +94,30 @@ async fn run(
     pool: &sqlx::postgres::PgPool,
     settings: &IngestSettings,
 ) -> RunError {
+    // Backfill requests are spread over the day instead of spent in a burst at midnight.
+    let pace = Duration::from_secs((86_400 / settings.backfill_budget.max(1)).max(1) as u64);
+    let mut next_pass = Instant::now();
     loop {
-        match runner.backfill_step().await {
-            Ok(BackfillStep::Done) => {}
-            Ok(BackfillStep::Progressed) => {
-                // The daily budget is the throttle; keep going, gently spaced.
-                let _ = sync_store::clear_auth_error(pool, &settings.account).await;
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                continue;
-            }
-            Ok(BackfillStep::BudgetSpent) => {
-                let _ = sync_store::clear_auth_error(pool, &settings.account).await;
-                tokio::time::sleep(settings.poll_interval).await;
-                continue;
-            }
-            Err(e) => return e,
-        }
-        match runner.pass().await {
-            Ok(report) => {
-                let _ = sync_store::clear_auth_error(pool, &settings.account).await;
-                tracing::info!(
+        if Instant::now() >= next_pass {
+            match runner.pass().await {
+                Ok(report) => tracing::info!(
                     activities = report.activities,
                     samples = report.samples,
                     daily = report.daily,
                     "pass complete"
-                );
+                ),
+                Err(e) => return e,
+            }
+            next_pass = Instant::now() + settings.poll_interval;
+        }
+        let wait = match runner.backfill_step().await {
+            Ok(BackfillStep::Progressed) => pace,
+            Ok(BackfillStep::Done | BackfillStep::BudgetSpent) => {
+                next_pass.saturating_duration_since(Instant::now())
             }
             Err(e) => return e,
-        }
-        tokio::time::sleep(settings.poll_interval).await;
+        };
+        let _ = sync_store::clear_auth_error(pool, &settings.account).await;
+        tokio::time::sleep(wait).await;
     }
 }

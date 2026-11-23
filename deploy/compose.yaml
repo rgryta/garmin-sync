@@ -4,6 +4,7 @@ services:
       - traefik.enable=false
       - wud.watch=true
       - wud.tag.include=^\d+\.\d+\.\d+$
+      - wud.trigger.include=dockercompose.garmin
       - autoheal=true
     image: ghcr.io/rgryta/garmin-sync:0.1.1
     container_name: garmin-mcp
@@ -43,6 +44,7 @@ services:
       - traefik.enable=false
       - wud.watch=true
       - wud.tag.include=^\d+\.\d+\.\d+$
+      - wud.trigger.include=dockercompose.garmin
     image: ghcr.io/rgryta/garmin-sync:0.1.1
     container_name: garmin-ingest
     restart: unless-stopped
