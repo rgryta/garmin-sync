@@ -19,6 +19,7 @@ garmin-client = { path = "../garmin" }
 fitparser = "0.9.0"
 garmin-core.workspace = true
 serde_json.workspace = true
+sha2 = "0.10.9"
 sqlx.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["time", "sync"] }
