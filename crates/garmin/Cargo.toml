@@ -1,12 +1,12 @@
-# The Garmin private-API client: reads the app's cgi-bin endpoints over HTTPS. No
-# database: it fetches and parses, nothing more.
+# The Garmin private-API client: reads Garmin Connect's connectapi endpoints over HTTPS
+# with a Bearer token it refreshes itself, and refreshes a Bearer token itself. No database: it
+# fetches and parses, nothing more.
 #
-# MIT, not AGPL: this client talks to a documented-by-observation private API and holds
-# no code derived from an AGPL source. (instagram-client is AGPL only because its wire
-# format work was; garmin' is original.)
+# MIT: this client talks to a documented-by-observation private API and holds no code
+# derived from an AGPL source.
 [package]
 name = "garmin-client"
-description = "Read-only client for the Garmin app's private API"
+description = "Read-only client for Garmin Connect private API"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,7 +14,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls-webpki-roots", "json"] }
+chrono = { workspace = true }
+reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls-webpki-roots", "json", "http2"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
