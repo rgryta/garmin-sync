@@ -22,7 +22,7 @@ services:
       - /usr/local/bin/garmin-mcp
     networks:
       homelab-network:
-        ipv4_address: 172.20.0.93
+        ipv4_address: 172.20.0.95
     deploy:
       resources:
         limits:
@@ -58,12 +58,12 @@ services:
       - /usr/local/bin/garmin-ingest
     networks:
       homelab-network:
-        ipv4_address: 172.20.0.94
+        ipv4_address: 172.20.0.96
     deploy:
       resources:
         limits:
-          cpus: "1"
-          memory: 256M
+          cpus: "2"
+          memory: 1G
 
 networks:
   homelab-network:

@@ -2,8 +2,7 @@
 #   docker build -f deploy/Dockerfile -t garmin-sync:latest .
 #
 # One image, two binaries: the services differ only by `command`. Both are Rust, so the
-# runtime stage carries nothing but the two binaries. The Chromium harvester this replaced
-# needed a 2.7 GB Playwright image; Garmin's own web client is no longer in the loop.
+# runtime stage carries nothing but the two binaries.
 
 # The latest stable Rust, matching the manifest's rust-version. Bump both together.
 FROM rust:1.100-slim-trixie@sha256:e9d95b74296f7126a83ae3d041aeaba1ff4c478f13abc5cc034fcf7c131c3d4a AS rust
@@ -23,9 +22,8 @@ COPY db-migrations/ ./db-migrations/
 RUN cargo build --release --workspace --bins --target x86_64-unknown-linux-musl
 
 # Nothing but the binaries. No libc, no shell, no certificate store, and each absence is
-# fine on purpose: TLS trust is bundled (`webpki-roots` in reqwest and tokio-tungstenite),
-# every time is UTC, nothing writes a temporary file, and musl reads the /etc/resolv.conf
-# Docker mounts in.
+# fine on purpose: TLS trust is bundled (`webpki-roots` in reqwest), every time is UTC,
+# nothing writes a temporary file, and musl reads the /etc/resolv.conf Docker mounts in.
 FROM scratch
 # Root-owned and merely executable, so neither service can rewrite its own binary.
 COPY --from=rust /build/target/x86_64-unknown-linux-musl/release/garmin-mcp /usr/local/bin/garmin-mcp
