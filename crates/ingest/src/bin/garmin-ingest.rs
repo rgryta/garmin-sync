@@ -10,7 +10,7 @@ use garmin_client::Client;
 use garmin_core::db::{create_pool, ensure_schema};
 use garmin_core::store::sync as sync_store;
 use garmin_ingest::config::IngestSettings;
-use garmin_ingest::runner::{LOOP, RunError, Runner, load_session};
+use garmin_ingest::runner::{BackfillStep, LOOP, RunError, Runner, load_session};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -94,8 +94,14 @@ async fn run(
 ) -> RunError {
     loop {
         match runner.backfill_step().await {
-            Ok(true) => {}
-            Ok(false) => {
+            Ok(BackfillStep::Done) => {}
+            Ok(BackfillStep::Progressed) => {
+                // The daily budget is the throttle; keep going, gently spaced.
+                let _ = sync_store::clear_auth_error(pool, &settings.account).await;
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+            Ok(BackfillStep::BudgetSpent) => {
                 let _ = sync_store::clear_auth_error(pool, &settings.account).await;
                 tokio::time::sleep(settings.poll_interval).await;
                 continue;

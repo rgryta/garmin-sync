@@ -57,6 +57,18 @@ impl From<ClientError> for RunError {
     }
 }
 
+/// The outcome of one `backfill_step`, so the caller knows whether to keep going now,
+/// wait for the daily budget to reset, or move on to polling.
+#[derive(Debug, PartialEq)]
+pub enum BackfillStep {
+    /// Everything is backfilled; nothing more to do.
+    Done,
+    /// Did a unit of work and the budget still has room — call again right away.
+    Progressed,
+    /// The day's request budget is spent; wait before trying again.
+    BudgetSpent,
+}
+
 #[derive(Debug, Default, PartialEq)]
 pub struct PassReport {
     pub activities: u64,
@@ -205,10 +217,11 @@ impl<S: Source> Runner<S> {
 
     /// One backfill step under the budget. Walks the activity list older and older
     /// (cursor = next page start), then each daily kind back day by day to the floor.
-    /// Returns true when everything is backfilled.
-    pub async fn backfill_step(&mut self) -> Result<bool, RunError> {
+    /// The caller loops on [`BackfillStep::Progressed`] (the day's budget is the throttle,
+    /// not the caller's poll interval) and waits on [`BackfillStep::BudgetSpent`].
+    pub async fn backfill_step(&mut self) -> Result<BackfillStep, RunError> {
         if sync::all_backfill_done(&self.pool, &all_kinds()).await? {
-            return Ok(true);
+            return Ok(BackfillStep::Done);
         }
         self.authenticate().await?;
         // Activities first.
@@ -217,7 +230,7 @@ impl<S: Source> Runner<S> {
             .unwrap_or_default();
         if !done {
             if !self.budget().await? {
-                return Ok(false);
+                return Ok(BackfillStep::BudgetSpent);
             }
             let start: i64 = cur.parse().unwrap_or(0);
             let page = self.source.activities(&self.session, start, 20).await?;
@@ -235,7 +248,7 @@ impl<S: Source> Runner<S> {
                 )
                 .await?;
             }
-            return Ok(false);
+            return Ok(BackfillStep::Progressed);
         }
         // Then each daily kind, oldest-unfilled date backwards.
         let floor =
@@ -255,7 +268,7 @@ impl<S: Source> Runner<S> {
                 continue;
             }
             if !self.budget().await? {
-                return Ok(false);
+                return Ok(BackfillStep::BudgetSpent);
             }
             self.ingest_daily(kind, next).await?;
             sync::cursor_set(
@@ -265,9 +278,13 @@ impl<S: Source> Runner<S> {
                 false,
             )
             .await?;
-            return Ok(false);
+            return Ok(BackfillStep::Progressed);
         }
-        Ok(sync::all_backfill_done(&self.pool, &all_kinds()).await?)
+        if sync::all_backfill_done(&self.pool, &all_kinds()).await? {
+            Ok(BackfillStep::Done)
+        } else {
+            Ok(BackfillStep::Progressed)
+        }
     }
 }
 

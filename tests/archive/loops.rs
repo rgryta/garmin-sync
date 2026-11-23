@@ -139,7 +139,10 @@ db_test!(the_display_name_is_resolved_and_persisted_once, |f| {
     let fake = Fake::default();
     let mut runner = Runner::new(f.pool.clone(), "owner".into(), 2000, fake, s);
     runner.pass().await.unwrap();
-    assert_eq!(runner.session().garmin_user_id.as_deref(), Some("display-guid"));
+    assert_eq!(
+        runner.session().garmin_user_id.as_deref(),
+        Some("display-guid")
+    );
     let stored: Value =
         sqlx::query_scalar("SELECT session FROM ingest_session WHERE account_id = 'owner'")
             .fetch_one(&f.pool)
@@ -148,6 +151,36 @@ db_test!(the_display_name_is_resolved_and_persisted_once, |f| {
     assert_eq!(
         stored.get("garmin_user_id").and_then(|v| v.as_str()),
         Some("display-guid")
+    );
+});
+
+db_test!(backfill_reports_budget_spent_when_the_budget_is_zero, |f| {
+    let fake = Fake {
+        activities: vec![act(1)],
+        ..Default::default()
+    };
+    let mut runner = Runner::new(f.pool.clone(), "owner".into(), 0, fake, seed_session(false));
+    assert_eq!(
+        runner.backfill_step().await.unwrap(),
+        garmin_ingest::runner::BackfillStep::BudgetSpent
+    );
+});
+
+db_test!(backfill_progresses_while_there_is_work_and_budget, |f| {
+    let fake = Fake {
+        activities: vec![act(1)],
+        ..Default::default()
+    };
+    let mut runner = Runner::new(
+        f.pool.clone(),
+        "owner".into(),
+        2000,
+        fake,
+        seed_session(false),
+    );
+    assert_eq!(
+        runner.backfill_step().await.unwrap(),
+        garmin_ingest::runner::BackfillStep::Progressed
     );
 });
 
