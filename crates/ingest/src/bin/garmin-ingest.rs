@@ -68,22 +68,28 @@ async fn main() -> ExitCode {
             Client::new(),
             session,
         );
-        match run(&mut runner, &pool, &settings).await {
-            RunError::Rejected => {
-                tracing::error!("session rejected; waiting for a fresh seed");
-                let _ = sync_store::record_auth_error(&pool, &settings.account, "session rejected")
-                    .await;
-                tokio::time::sleep(settings.auth_retry).await;
-            }
-            RunError::Throttled { retry_after } => {
-                let wait = retry_after.unwrap_or(600);
-                tracing::warn!(wait, "throttled; backing off");
-                tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
-            }
-            other => {
-                tracing::error!(%other, "pass failed; retrying after the poll interval");
-                let _ = sync_store::record_error(&pool, LOOP, &other.to_string()).await;
-                tokio::time::sleep(settings.poll_interval).await;
+        // The runner outlives a failed pass, so its daily-poll clock does too; only a
+        // rejected session builds a new one from a fresh seed.
+        loop {
+            match run(&mut runner, &pool, &settings).await {
+                RunError::Rejected => {
+                    tracing::error!("session rejected; waiting for a fresh seed");
+                    let _ =
+                        sync_store::record_auth_error(&pool, &settings.account, "session rejected")
+                            .await;
+                    tokio::time::sleep(settings.auth_retry).await;
+                    break;
+                }
+                RunError::Throttled { retry_after } => {
+                    let wait = retry_after.unwrap_or(600);
+                    tracing::warn!(wait, "throttled; backing off");
+                    tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                }
+                other => {
+                    tracing::error!(%other, "pass failed; retrying after the poll interval");
+                    let _ = sync_store::record_error(&pool, LOOP, &other.to_string()).await;
+                    tokio::time::sleep(settings.poll_interval).await;
+                }
             }
         }
     }

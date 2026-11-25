@@ -208,6 +208,7 @@ impl<S: Source> Runner<S> {
             .daily(&self.session, kind, &date.to_string())
             .await
         {
+            Ok(Value::Null) => Ok(true), // a 204: no data that day; counts as done
             Ok(v) => {
                 let mut conn = self.pool.acquire().await?;
                 daily::upsert(&mut conn, kind, date, &v).await?;
