@@ -198,11 +198,13 @@ impl Client {
         Ok(resp)
     }
 
-    /// GET a JSON endpoint.
+    /// GET a JSON endpoint. A 204 (no data, e.g. a day the watch recorded no HRV) is `Null`.
     pub async fn get_json(&self, s: &Session, path: &str) -> Result<Value, ClientError> {
-        self.send(s, path)
-            .await?
-            .json()
+        let resp = self.send(s, path).await?;
+        if resp.status() == reqwest::StatusCode::NO_CONTENT {
+            return Ok(Value::Null);
+        }
+        resp.json()
             .await
             .map_err(|e| ClientError::Shape(e.to_string()))
     }

@@ -36,6 +36,10 @@ async fn serve() -> (String, String) {
         if path.contains("activitylist-service/activities/search/activities") {
             return Json(json!([{"activityId": 1}, {"activityId": 2}])).into_response();
         }
+        if path.contains("hrv-service") {
+            // A day with no HRV: Garmin answers 204 with an empty body.
+            return StatusCode::NO_CONTENT.into_response();
+        }
         if path.contains("userprofile-service") {
             // A rejected session: 401.
             return (StatusCode::UNAUTHORIZED, "no").into_response();
@@ -92,6 +96,14 @@ async fn activities_page() {
     let acts = client.activities(&session(), 0, 20).await.unwrap();
     assert_eq!(acts.len(), 2);
     assert_eq!(acts[0].get("activityId").and_then(Value::as_i64), Some(1));
+}
+
+#[tokio::test]
+async fn a_204_day_is_null_not_a_shape_error() {
+    let (api, diauth) = serve().await;
+    let client = Client::with_bases(api, diauth);
+    let day = client.daily(&session(), "hrv", "2026-09-22").await.unwrap();
+    assert!(day.is_null(), "{day:?}");
 }
 
 #[tokio::test]
