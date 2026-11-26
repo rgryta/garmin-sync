@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use chrono::{DateTime, NaiveDate, Utc};
-use garmin_core::store::{activities, daily, samples, sql, sync};
+use garmin_core::store::{activities, daily, devices, samples, sql, sync};
 use sqlx::postgres::PgPool;
 
 use crate::render;
@@ -50,7 +50,8 @@ fn clamp(limit: Option<i64>, default: i64, ceiling: i64) -> i64 {
 pub async fn status(pool: &PgPool) -> R {
     let loops = sync::status(pool).await?;
     let kinds = daily::kinds(pool).await?;
-    Ok(render::status(&loops, &kinds))
+    let devices = devices::list(pool).await?;
+    Ok(render::status(&loops, &kinds, &devices))
 }
 
 pub async fn activities_tool(

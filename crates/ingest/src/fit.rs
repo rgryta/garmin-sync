@@ -137,15 +137,24 @@ fn timestamp(fields: &[FitDataField], name: &str) -> Option<DateTime<Utc>> {
 const FIT_EPOCH: i64 = 631_065_600;
 
 /// Parse a day's wellness download (a zip of FIT files, or one bare FIT) into intraday
-/// readings. A file that will not parse is skipped; the caller keeps the download whole.
+/// readings, one per (kind, ts), each with the serial of the device that wrote it. A file
+/// that will not parse is skipped; the caller keeps the download whole.
 pub fn parse_wellness(download: &[u8]) -> Vec<WellnessSample> {
     let mut out = Vec::new();
+    wellness_files(download, &mut out);
+    // Two files of one day can repeat a reading; the store wants each (kind, ts) once.
+    out.sort_by(|a, b| (a.kind, a.ts).cmp(&(b.kind, b.ts)));
+    out.dedup_by(|a, b| a.kind == b.kind && a.ts == b.ts);
+    out
+}
+
+fn wellness_files(download: &[u8], out: &mut Vec<WellnessSample>) {
     if !download.starts_with(b"PK\x03\x04") {
-        wellness_fit(download, &mut out);
-        return out;
+        wellness_fit(download, out);
+        return;
     }
     let Ok(mut zip) = zip::ZipArchive::new(std::io::Cursor::new(download)) else {
-        return out;
+        return;
     };
     for i in 0..zip.len() {
         let Ok(mut entry) = zip.by_index(i) else {
@@ -159,10 +168,9 @@ pub fn parse_wellness(download: &[u8]) -> Vec<WellnessSample> {
         }
         let mut bytes = Vec::new();
         if std::io::copy(&mut entry, &mut bytes).is_ok() {
-            wellness_fit(&bytes, &mut out);
+            wellness_fit(&bytes, out);
         }
     }
-    out
 }
 
 fn wellness_fit(bytes: &[u8], out: &mut Vec<WellnessSample>) {
@@ -177,9 +185,15 @@ fn wellness_fit(bytes: &[u8], out: &mut Vec<WellnessSample>) {
     // Monitoring rows mostly carry only the low 16 bits of a FIT-epoch timestamp, resolved
     // against the last full timestamp in the file.
     let mut last_full: Option<i64> = None;
+    // The file header's serial: Garmin's deviceId of the watch that wrote the file.
+    let mut device_id: Option<i64> = None;
     for rec in records {
         let fields = rec.fields();
         let field = |name: &str| fields.iter().find(|f| f.name() == name).map(|f| f.value());
+        if rec.kind() == MesgNum::FileId {
+            device_id = field("serial_number").and_then(num).map(|n| n as i64);
+            continue;
+        }
         let full = timestamp(fields, "timestamp");
         if let Some(t) = full {
             last_full = Some(t.timestamp() - FIT_EPOCH);
@@ -210,7 +224,12 @@ fn wellness_fit(bytes: &[u8], out: &mut Vec<WellnessSample>) {
         // Negative (and, except for stress, zero) is Garmin's "not measured": off the
         // wrist, or moving too much.
         if value > 0.0 || (kind == "stress" && value == 0.0) {
-            out.push(WellnessSample { kind, ts, value });
+            out.push(WellnessSample {
+                kind,
+                ts,
+                value,
+                device_id,
+            });
         }
     }
 }

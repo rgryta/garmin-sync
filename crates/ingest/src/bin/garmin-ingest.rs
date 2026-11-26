@@ -68,6 +68,13 @@ async fn main() -> ExitCode {
             Client::new(),
             session,
         );
+        match runner.relink_wellness().await {
+            Ok(0) => {}
+            Ok(days) => tracing::info!(days, "linked stored wellness days to their device"),
+            Err(e) => {
+                tracing::warn!(%e, "could not link stored wellness days; will retry next start")
+            }
+        }
         // The runner outlives a failed pass, so its daily-poll clock does too; only a
         // rejected session builds a new one from a fresh seed.
         loop {

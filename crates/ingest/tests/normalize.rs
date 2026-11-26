@@ -43,3 +43,21 @@ fn a_missing_id_is_a_shape_error() {
             .contains("activityId")
     );
 }
+
+#[test]
+fn a_registered_device_maps() {
+    let d = json!({
+        "deviceId": 1234567890u64, "productDisplayName": "quatix 7 Sapphire",
+        "displayName": "my watch", "productSku": "010-02582-61", "partNumber": "006-B3943-00",
+        "applicationKey": "quatix7OLED", "registeredDate": 1721812308000i64
+    });
+    let dev = normalize::device(&d).unwrap();
+    assert_eq!(dev.id, 1234567890);
+    assert_eq!(dev.display_name.as_deref(), Some("quatix 7 Sapphire"));
+    assert_eq!(dev.product_sku.as_deref(), Some("010-02582-61"));
+    assert_eq!(
+        dev.registered_at.unwrap().to_rfc3339(),
+        "2024-07-24T09:11:48+00:00"
+    );
+    assert!(normalize::device(&json!({"displayName": "no id"})).is_none());
+}

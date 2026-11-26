@@ -2,11 +2,12 @@
 
 use garmin_core::store::activities::ActivityRow;
 use garmin_core::store::daily::DailyRow;
+use garmin_core::store::devices::DeviceRow;
 use garmin_core::store::samples::SampleSummary;
 use garmin_core::store::sql::SqlResult;
 use garmin_core::store::sync::StatusRow;
 
-pub fn status(loops: &[StatusRow], kinds: &[(String, i64)]) -> String {
+pub fn status(loops: &[StatusRow], kinds: &[(String, i64)], devices: &[DeviceRow]) -> String {
     let mut out = String::from("Garmin archive status\n");
     for l in loops {
         out.push_str(&format!(
@@ -28,6 +29,21 @@ pub fn status(loops: &[StatusRow], kinds: &[(String, i64)]) -> String {
     for (k, n) in kinds {
         out.push_str(&format!("  {k}: {n} days\n"));
     }
+    out.push_str("Registered devices:\n");
+    for d in devices {
+        out.push_str(&format!(
+            "  {} (id {}{}{})\n",
+            d.display_name.as_deref().unwrap_or("unnamed"),
+            d.id,
+            d.product_sku
+                .as_deref()
+                .map(|s| format!(", SKU {s}"))
+                .unwrap_or_default(),
+            d.registered_at
+                .map(|t| format!(", registered {}", t.date_naive()))
+                .unwrap_or_default(),
+        ));
+    }
     out
 }
 
@@ -38,7 +54,7 @@ pub fn activities(rows: &[ActivityRow]) -> String {
     let mut out = String::from("Activities (newest first)\n");
     for a in rows {
         out.push_str(&format!(
-            "  [{}] {} — {}{}{}{}\n",
+            "  [{}] {} — {}{}{}{}{}\n",
             a.id,
             a.start_ts.to_rfc3339(),
             a.type_.as_deref().unwrap_or("activity"),
@@ -54,6 +70,10 @@ pub fn activities(rows: &[ActivityRow]) -> String {
             } else {
                 ""
             },
+            a.device
+                .as_deref()
+                .map(|d| format!(" · {d}"))
+                .unwrap_or_default(),
         ));
     }
     out

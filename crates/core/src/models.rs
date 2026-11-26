@@ -63,10 +63,23 @@ impl Bucket {
 }
 
 /// One intraday reading from a day's wellness files: `kind` is heart_rate, hrv, stress or
-/// respiration.
+/// respiration; `device_id` is the serial of the device that wrote the file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WellnessSample {
     pub kind: &'static str,
     pub ts: DateTime<Utc>,
     pub value: f64,
+    pub device_id: Option<i64>,
+}
+
+/// A device from the account's registry. `id` is Garmin's deviceId, which is also the
+/// serial in that device's FIT files and the `device` on its activities.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Device {
+    pub id: i64,
+    pub display_name: Option<String>,
+    pub product_sku: Option<String>,
+    pub part_number: Option<String>,
+    pub application_key: Option<String>,
+    pub registered_at: Option<DateTime<Utc>>,
 }

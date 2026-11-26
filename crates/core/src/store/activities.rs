@@ -105,6 +105,8 @@ pub struct ActivityRow {
     pub manual: Option<bool>,
     pub duration_s: Option<f64>,
     pub distance_m: Option<f64>,
+    /// The device's registered name, or its id when the registry does not know it.
+    pub device: Option<String>,
 }
 
 pub async fn list(
@@ -115,12 +117,14 @@ pub async fn list(
     limit: i64,
 ) -> sqlx::Result<Vec<ActivityRow>> {
     sqlx::query_as(
-        "SELECT id, start_ts, type AS type_, name, manual, duration_s, distance_m FROM activity \
-         WHERE deleted_at IS NULL \
-           AND ($1::timestamptz IS NULL OR start_ts >= $1) \
-           AND ($2::timestamptz IS NULL OR start_ts <= $2) \
-           AND ($3::text IS NULL OR type = $3) \
-         ORDER BY start_ts DESC LIMIT $4",
+        "SELECT a.id, a.start_ts, a.type AS type_, a.name, a.manual, a.duration_s, a.distance_m, \
+           coalesce(d.display_name, nullif(a.device, '0')) AS device \
+         FROM activity a LEFT JOIN device d ON d.id::text = a.device \
+         WHERE a.deleted_at IS NULL \
+           AND ($1::timestamptz IS NULL OR a.start_ts >= $1) \
+           AND ($2::timestamptz IS NULL OR a.start_ts <= $2) \
+           AND ($3::text IS NULL OR a.type = $3) \
+         ORDER BY a.start_ts DESC LIMIT $4",
     )
     .bind(after)
     .bind(before)
