@@ -7,3 +7,4 @@ pub mod samples;
 pub mod session;
 pub mod sql;
 pub mod sync;
+pub mod wellness;

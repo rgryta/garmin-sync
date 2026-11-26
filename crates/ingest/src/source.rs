@@ -16,6 +16,7 @@ pub trait Source {
     async fn activity_details(&self, s: &Session, id: i64) -> Result<Value, ClientError>;
     async fn activity_file(&self, s: &Session, id: i64) -> Result<Vec<u8>, ClientError>;
     async fn daily(&self, s: &Session, kind: &str, date: &str) -> Result<Value, ClientError>;
+    async fn wellness_file(&self, s: &Session, date: &str) -> Result<Vec<u8>, ClientError>;
 }
 
 impl Source for Client {
@@ -41,5 +42,8 @@ impl Source for Client {
     }
     async fn daily(&self, s: &Session, kind: &str, date: &str) -> Result<Value, ClientError> {
         Client::daily(self, s, kind, date).await
+    }
+    async fn wellness_file(&self, s: &Session, date: &str) -> Result<Vec<u8>, ClientError> {
+        Client::wellness_file(self, s, date).await
     }
 }

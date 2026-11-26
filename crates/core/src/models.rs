@@ -61,3 +61,12 @@ impl Bucket {
         }
     }
 }
+
+/// One intraday reading from a day's wellness files: `kind` is heart_rate, hrv, stress or
+/// respiration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WellnessSample {
+    pub kind: &'static str,
+    pub ts: DateTime<Utc>,
+    pub value: f64,
+}

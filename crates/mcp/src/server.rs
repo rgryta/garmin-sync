@@ -39,7 +39,10 @@ archived, and nothing here can change anything on the account.
 Two kinds of data: activities (each workout, with its per-second samples parsed from the
 original FIT file — heart rate, power, cadence, speed, altitude, GPS) and daily metrics
 (sleep, HRV, stress, body battery, steps, respiration, SpO2, training readiness, VO2 max,
-weight, and a daily summary). Timestamps are ISO 8601; GPS is present.
+weight, and a daily summary). Intraday readings parsed from each day's watch files live in
+`wellness_sample` (kind, ts, value): heart_rate about every minute, hrv every 5 minutes
+overnight, stress and respiration about every minute — for every day, including the older
+days where the daily JSON holds no intraday detail. Timestamps are ISO 8601; GPS is present.
 
 `activities` lists workouts, `activity` shows one with a sample summary, `day` shows every
 metric for a date, `metric` follows one daily kind over time, and `sql` runs a read-only
@@ -211,7 +214,8 @@ impl GarminMcp {
         name = "sql",
         description = "Run a read-only SELECT over the archive when the other tools do not fit. \
                        Tables: activity, activity_sample (per-second), activity_file, daily_metric \
-                       (kind,date,raw), raw_response, sync_state. The query runs READ ONLY with a 10s \
+                       (kind,date,raw), wellness_sample (kind,ts,value: intraday heart_rate, hrv, \
+                       stress, respiration), wellness_file, raw_response, sync_state. The query runs READ ONLY with a 10s \
                        timeout and a 500-row cap; writes and the session table are refused.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]

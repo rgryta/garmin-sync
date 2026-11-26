@@ -44,7 +44,11 @@ fn build_fit() -> Vec<u8> {
         data.extend_from_slice(&lat_semi.to_le_bytes());
         data.extend_from_slice(&lon_semi.to_le_bytes());
     }
+    fit_file(&data)
+}
 
+/// Wrap data messages in a FIT header and CRC.
+fn fit_file(data: &[u8]) -> Vec<u8> {
     // 14-byte header.
     let mut file: Vec<u8> = Vec::new();
     file.push(14); // header size
@@ -55,7 +59,7 @@ fn build_fit() -> Vec<u8> {
     let header_crc = fit_crc(&file);
     file.extend_from_slice(&header_crc.to_le_bytes());
     // Data, then the file CRC over everything so far.
-    file.extend_from_slice(&data);
+    file.extend_from_slice(data);
     let file_crc = fit_crc(&file);
     file.extend_from_slice(&file_crc.to_le_bytes());
     file
@@ -110,4 +114,53 @@ fn a_bare_fit_passes_through() {
 fn a_zip_without_a_fit_is_kept_as_zip() {
     let (format, _) = garmin_ingest::fit::unwrap_download(zip_with("track.gpx", b"<gpx/>"));
     assert_eq!(format, "zip");
+}
+
+/// A wellness monitoring file as the watch writes it: one full timestamp, then rows with
+/// only its low 16 bits (FIT epoch), here crossing a 16-bit wrap; a 0 bpm row is "not
+/// measured". Plus one stress row (its own time field) and one unmeasured (-1) stress row.
+fn monitoring_fit(ts0: u32) -> Vec<u8> {
+    let mut d: Vec<u8> = Vec::new();
+    // Local 0: monitoring (55) with timestamp + heart_rate.
+    d.extend_from_slice(&[0x40, 0, 0, 55, 0, 2, 253, 4, 0x86, 27, 1, 0x02]);
+    // Local 1: monitoring with timestamp_16 + heart_rate.
+    d.extend_from_slice(&[0x41, 0, 0, 55, 0, 2, 26, 2, 0x84, 27, 1, 0x02]);
+    // Local 2: stress_level (227) with stress_level_value (sint16) + stress_level_time.
+    d.extend_from_slice(&[0x42, 0, 0, 227, 0, 2, 0, 2, 0x83, 1, 4, 0x86]);
+    d.push(0x00);
+    d.extend_from_slice(&ts0.to_le_bytes());
+    d.push(60);
+    for (offset, bpm) in [(60u32, 61u8), (120, 0)] {
+        d.push(0x01);
+        d.extend_from_slice(&(((ts0 + offset) & 0xFFFF) as u16).to_le_bytes());
+        d.push(bpm);
+    }
+    for (offset, stress) in [(60u32, 25i16), (120, -1)] {
+        d.push(0x02);
+        d.extend_from_slice(&stress.to_le_bytes());
+        d.extend_from_slice(&(ts0 + offset).to_le_bytes());
+    }
+    fit_file(&d)
+}
+
+#[test]
+fn wellness_readings_resolve_short_timestamps_and_drop_unmeasured() {
+    // The low 16 bits sit just below the wrap, so +60 s rolls them over.
+    let ts0: u32 = (1_000_000_000 & !0xFFFF) | 0xFFF0;
+    let unix = |fit: u32| chrono::DateTime::from_timestamp(fit as i64 + 631_065_600, 0).unwrap();
+    let got = garmin_ingest::fit::parse_wellness(&zip_with("1_WELLNESS.fit", &monitoring_fit(ts0)));
+    let got: Vec<_> = got.iter().map(|s| (s.kind, s.ts, s.value)).collect();
+    assert_eq!(
+        got,
+        vec![
+            ("heart_rate", unix(ts0), 60.0),
+            ("heart_rate", unix(ts0 + 60), 61.0),
+            ("stress", unix(ts0 + 60), 25.0),
+        ]
+    );
+}
+
+#[test]
+fn a_wellness_file_that_will_not_parse_yields_nothing() {
+    assert!(garmin_ingest::fit::parse_wellness(b"not a fit").is_empty());
 }
