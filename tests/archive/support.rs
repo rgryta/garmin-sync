@@ -16,7 +16,8 @@ use tokio::sync::{Mutex, OnceCell};
 /// Every table the migrations create, minus `schema_migration`. `activity_file` and
 /// `activity_sample` go with `activity` through the CASCADE.
 const TRUNCATE_ALL: &str = "TRUNCATE activity, daily_metric, raw_response, ingest_session, \
-                            sync_state, backfill_cursor, account CASCADE";
+                            sync_state, backfill_cursor, account, wellness_file, \
+                            wellness_sample CASCADE";
 
 /// One named container serves every run, parked in a `static` and marked for reuse.
 /// Remove it with `docker rm -f garmin-sync-test-pg` when you want the disk back.
