@@ -12,7 +12,11 @@ Every activity is archived with its summary, its original FIT file (`activity_fi
 its per-second samples (`activity_sample`: heart rate, cadence, power, speed, altitude,
 GPS, temperature). Daily tracking metrics (sleep, HRV, resting heart rate, stress, body
 battery, steps, respiration, SpO2, training readiness, VO2max, weight) are kept per day
-in `daily_metric`. The ingester keeps its OAuth session in the `ingest_session` table,
+in `daily_metric`. Each day's wellness download (the zipped FIT files the watch synced)
+is kept in `wellness_file`, and its intraday readings in `wellness_sample`: heart rate
+about every minute, HRV every 5 minutes overnight, stress and respiration about every
+minute. Garmin's JSON drops the intraday heart rate and HRV of older days; these files
+keep it. The ingester keeps its OAuth session in the `ingest_session` table,
 which the MCP role cannot read.
 
 ## Design notes

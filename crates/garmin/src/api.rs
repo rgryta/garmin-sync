@@ -263,6 +263,13 @@ impl Client {
             .await
     }
 
+    /// The day's wellness download: a zip of the FIT files the watch synced that day. A 404
+    /// means nothing was synced (a day before the watch).
+    pub async fn wellness_file(&self, s: &Session, date: &str) -> Result<Vec<u8>, ClientError> {
+        self.get_bytes(s, &format!("download-service/files/wellness/{date}"))
+            .await
+    }
+
     /// A daily metric for one date, by kind (see [`DAILY_PATHS`]).
     pub async fn daily(&self, s: &Session, kind: &str, date: &str) -> Result<Value, ClientError> {
         let template = DAILY_PATHS

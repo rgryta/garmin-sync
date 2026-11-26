@@ -31,6 +31,16 @@ fn fit(bad: bool) -> Vec<u8> {
     if bad {
         return b"not a fit file".to_vec();
     }
+    one_message(20, 3)
+}
+
+/// A day's wellness download: one monitoring message with a heart rate.
+fn wellness_fit() -> Vec<u8> {
+    one_message(55, 27)
+}
+
+/// A FIT holding one message of type `global`: a timestamp and a uint8 at `field`.
+fn one_message(global: u8, field: u8) -> Vec<u8> {
     fn crc(data: &[u8]) -> u16 {
         const T: [u16; 16] = [
             0x0000, 0xCC01, 0xD801, 0x1400, 0xF001, 0x3C00, 0x2800, 0xE401, 0xA001, 0x6C00, 0x7800,
@@ -46,7 +56,7 @@ fn fit(bad: bool) -> Vec<u8> {
         }
         c
     }
-    let mut d = vec![0x40, 0x00, 0x00, 20, 0, 2, 253, 4, 0x86, 3, 1, 0x02];
+    let mut d = vec![0x40, 0x00, 0x00, global, 0, 2, 253, 4, 0x86, field, 1, 0x02];
     d.push(0x00);
     d.extend_from_slice(&1_000_000_000u32.to_le_bytes());
     d.push(140);
@@ -106,6 +116,13 @@ impl Source for Fake {
             .unwrap()
             .push((kind.to_owned(), date.to_owned()));
         Ok(json!({"ok": true}))
+    }
+    async fn wellness_file(&self, _s: &Session, date: &str) -> Result<Vec<u8>, ClientError> {
+        self.daily_calls
+            .lock()
+            .unwrap()
+            .push(("wellness".to_owned(), date.to_owned()));
+        Ok(wellness_fit())
     }
 }
 
@@ -385,4 +402,33 @@ db_test!(a_poll_skips_already_stored_activities, |f| {
     );
     let r2 = runner2.pass().await.unwrap();
     assert_eq!(r2.activities, 0);
+});
+
+db_test!(a_wellness_download_is_kept_with_its_readings, |f| {
+    let fake = Fake {
+        activities: vec![act_days_ago(1, 5)],
+        ..Default::default()
+    };
+    let mut runner = Runner::new(
+        f.pool.clone(),
+        "owner".into(),
+        2000,
+        fake,
+        seed_session(false),
+    );
+    assert_eq!(
+        backfill_until_stopped(&mut runner).await,
+        BackfillStep::Done
+    );
+    let files: i64 = sqlx::query_scalar("SELECT count(*) FROM wellness_file")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(files, 4, "one download per day back to the floor");
+    let readings: Vec<(String, f64)> = sqlx::query_as("SELECT kind, value FROM wellness_sample")
+        .fetch_all(&f.pool)
+        .await
+        .unwrap();
+    // Every fake day holds the same reading, so it is stored once.
+    assert_eq!(readings, vec![("heart_rate".to_owned(), 140.0)]);
 });

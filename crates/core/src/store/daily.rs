@@ -72,9 +72,12 @@ pub async fn day(pool: &PgPool, date: NaiveDate) -> sqlx::Result<Vec<DailyRow>> 
         .await
 }
 
-/// The distinct kinds held, for `status`.
+/// The distinct kinds held, with the days of wellness files, for `status`.
 pub async fn kinds(pool: &PgPool) -> sqlx::Result<Vec<(String, i64)>> {
-    sqlx::query_as("SELECT kind, count(*) FROM daily_metric GROUP BY kind ORDER BY kind")
-        .fetch_all(pool)
-        .await
+    sqlx::query_as(
+        "SELECT kind, count(*) FROM daily_metric GROUP BY kind \
+         UNION ALL SELECT 'wellness', count(*) FROM wellness_file ORDER BY 1",
+    )
+    .fetch_all(pool)
+    .await
 }

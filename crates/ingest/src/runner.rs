@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 
 use chrono::{NaiveDate, TimeDelta, Utc};
 use garmin_client::{ClientError, Session};
-use garmin_core::store::{activities, daily, raw, samples, session as session_store, sync};
+use garmin_core::store::{
+    activities, daily, raw, samples, session as session_store, sync, wellness,
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPool;
@@ -17,7 +19,10 @@ use crate::normalize;
 use crate::source::Source;
 
 pub const LOOP: &str = "sync";
-/// The daily metric kinds backfilled and polled (keys into the client's DAILY_PATHS).
+/// The day's wellness download (zipped FIT files), backfilled and polled like a daily kind.
+pub const WELLNESS: &str = "wellness";
+/// The daily kinds backfilled and polled: keys into the client's DAILY_PATHS, plus
+/// [`WELLNESS`].
 pub const DAILY_KINDS: &[&str] = &[
     "summary",
     "sleep",
@@ -31,6 +36,7 @@ pub const DAILY_KINDS: &[&str] = &[
     "training_readiness",
     "vo2max",
     "weight",
+    WELLNESS,
 ];
 /// How many trailing days each poll re-fetches (Garmin recomputes recent days).
 const POLL_TRAILING_DAYS: i64 = 3;
@@ -38,7 +44,7 @@ const POLL_TRAILING_DAYS: i64 = 3;
 const DEFAULT_FLOOR_YEARS: i64 = 20;
 /// What backfill leaves of the day's budget, so the poll still runs on a busy day.
 pub const POLL_RESERVE: i64 = 250;
-/// How often a pass re-fetches the trailing window of daily metrics (12 kinds x 3 days).
+/// How often a pass re-fetches the trailing window of daily metrics (13 kinds x 3 days).
 const DAILY_POLL_EVERY: Duration = Duration::from_secs(4 * 60 * 60);
 
 #[derive(Debug, thiserror::Error)]
@@ -168,10 +174,7 @@ impl<S: Source> Runner<S> {
             match self.source.activity_file(&self.session, act.id).await {
                 Ok(bytes) => {
                     let (format, stored) = fit::unwrap_download(bytes);
-                    let sha: String = Sha256::digest(&stored)
-                        .iter()
-                        .map(|b| format!("{b:02x}"))
-                        .collect();
+                    let sha = sha256_hex(&stored);
                     activities::save_file(&mut conn, act.id, &format, &stored, &sha).await?;
                     if format == "fit" {
                         match fit::parse_samples(&stored) {
@@ -203,6 +206,9 @@ impl<S: Source> Runner<S> {
         if !self.budget(ceiling).await? {
             return Ok(false);
         }
+        if kind == WELLNESS {
+            return self.ingest_wellness(date).await;
+        }
         match self
             .source
             .daily(&self.session, kind, &date.to_string())
@@ -218,6 +224,25 @@ impl<S: Source> Runner<S> {
             Err(ClientError::Http(404)) => Ok(true), // no data that day; counts as done
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Fetch and store the day's wellness download with the readings parsed from it.
+    async fn ingest_wellness(&mut self, date: NaiveDate) -> Result<bool, RunError> {
+        let bytes = match self
+            .source
+            .wellness_file(&self.session, &date.to_string())
+            .await
+        {
+            Ok(b) => b,
+            Err(ClientError::Http(404)) => return Ok(true), // nothing synced that day
+            Err(e) => return Err(e.into()),
+        };
+        let readings = fit::parse_wellness(&bytes);
+        let mut tx = self.pool.begin().await?;
+        wellness::save_file(&mut tx, date, &bytes, &sha256_hex(&bytes)).await?;
+        wellness::insert_samples(&mut tx, &readings).await?;
+        tx.commit().await?;
+        Ok(true)
     }
 
     /// One poll pass: new activities since the newest stored, and a trailing window of
@@ -336,6 +361,13 @@ impl<S: Source> Runner<S> {
         .await?;
         Ok(BackfillStep::Progressed)
     }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn all_kinds() -> Vec<&'static str> {
