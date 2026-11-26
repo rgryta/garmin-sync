@@ -16,7 +16,10 @@ in `daily_metric`. Each day's wellness download (the zipped FIT files the watch 
 is kept in `wellness_file`, and its intraday readings in `wellness_sample`: heart rate
 about every minute, HRV every 5 minutes overnight, stress and respiration about every
 minute. Garmin's JSON drops the intraday heart rate and HRV of older days; these files
-keep it. The ingester keeps its OAuth session in the `ingest_session` table,
+keep it. The account's device registry is kept in `device`, refreshed with the daily
+metrics: Garmin's deviceId there is the `device` on each activity and the serial in the
+watch's FIT files (`device_id` on wellness rows), so every record names the exact model
+that made it. The ingester keeps its OAuth session in the `ingest_session` table,
 which the MCP role cannot read.
 
 ## Design notes

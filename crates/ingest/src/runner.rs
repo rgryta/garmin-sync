@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use chrono::{NaiveDate, TimeDelta, Utc};
 use garmin_client::{ClientError, Session};
 use garmin_core::store::{
-    activities, daily, raw, samples, session as session_store, sync, wellness,
+    activities, daily, devices, raw, samples, session as session_store, sync, wellness,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -238,11 +238,49 @@ impl<S: Source> Runner<S> {
             Err(e) => return Err(e.into()),
         };
         let readings = fit::parse_wellness(&bytes);
+        let device = readings.iter().find_map(|s| s.device_id);
         let mut tx = self.pool.begin().await?;
-        wellness::save_file(&mut tx, date, &bytes, &sha256_hex(&bytes)).await?;
+        wellness::save_file(&mut tx, date, &bytes, &sha256_hex(&bytes), device).await?;
         wellness::insert_samples(&mut tx, &readings).await?;
         tx.commit().await?;
         Ok(true)
+    }
+
+    /// Give wellness rows stored before devices were linked their device, re-reading the
+    /// stored downloads (no request to Garmin). Returns how many days were linked.
+    pub async fn relink_wellness(&self) -> Result<u64, RunError> {
+        let mut linked = 0;
+        for date in wellness::unlinked_dates(&self.pool).await? {
+            let Some(bytes) = wellness::file(&self.pool, date).await? else {
+                continue;
+            };
+            let readings = fit::parse_wellness(&bytes);
+            let Some(device) = readings.iter().find_map(|s| s.device_id) else {
+                continue;
+            };
+            let mut tx = self.pool.begin().await?;
+            wellness::set_file_device(&mut tx, date, device).await?;
+            wellness::insert_samples(&mut tx, &readings).await?;
+            tx.commit().await?;
+            linked += 1;
+        }
+        Ok(linked)
+    }
+
+    /// Refresh the account's device registry: one request.
+    async fn ingest_devices(&mut self) -> Result<(), RunError> {
+        if !self.budget(self.budget).await? {
+            return Ok(());
+        }
+        let v = self.source.devices(&self.session).await?;
+        let mut conn = self.pool.acquire().await?;
+        raw::upsert(&mut conn, "devices", "registration", &v).await?;
+        for d in v.as_array().into_iter().flatten() {
+            if let Some(device) = normalize::device(d) {
+                devices::upsert(&mut conn, &device, d).await?;
+            }
+        }
+        Ok(())
     }
 
     /// One poll pass: new activities since the newest stored, and a trailing window of
@@ -268,6 +306,7 @@ impl<S: Source> Runner<S> {
             .daily_polled
             .is_none_or(|at| at.elapsed() >= DAILY_POLL_EVERY)
         {
+            self.ingest_devices().await?;
             let today = Utc::now().date_naive();
             for kind in DAILY_KINDS {
                 for back in 0..POLL_TRAILING_DAYS {

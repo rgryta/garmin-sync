@@ -31,16 +31,20 @@ fn fit(bad: bool) -> Vec<u8> {
     if bad {
         return b"not a fit file".to_vec();
     }
-    one_message(20, 3)
+    one_message(20, 3, None)
 }
 
-/// A day's wellness download: one monitoring message with a heart rate.
+/// The fake watch's deviceId: in the registry and as its FIT files' serial.
+const WATCH: u32 = 7;
+
+/// A day's wellness download from the watch: one monitoring message with a heart rate.
 fn wellness_fit() -> Vec<u8> {
-    one_message(55, 27)
+    one_message(55, 27, Some(WATCH))
 }
 
-/// A FIT holding one message of type `global`: a timestamp and a uint8 at `field`.
-fn one_message(global: u8, field: u8) -> Vec<u8> {
+/// A FIT holding one message of type `global`: a timestamp and a uint8 at `field`, after
+/// a file_id carrying `serial` when given.
+fn one_message(global: u8, field: u8, serial: Option<u32>) -> Vec<u8> {
     fn crc(data: &[u8]) -> u16 {
         const T: [u16; 16] = [
             0x0000, 0xCC01, 0xD801, 0x1400, 0xF001, 0x3C00, 0x2800, 0xE401, 0xA001, 0x6C00, 0x7800,
@@ -56,7 +60,13 @@ fn one_message(global: u8, field: u8) -> Vec<u8> {
         }
         c
     }
-    let mut d = vec![0x40, 0x00, 0x00, global, 0, 2, 253, 4, 0x86, field, 1, 0x02];
+    let mut d = Vec::new();
+    if let Some(serial) = serial {
+        // file_id (global 0) with serial_number (field 3, uint32z), as local type 1.
+        d.extend_from_slice(&[0x41, 0x00, 0x00, 0, 0, 1, 3, 4, 0x8C, 0x01]);
+        d.extend_from_slice(&serial.to_le_bytes());
+    }
+    d.extend_from_slice(&[0x40, 0x00, 0x00, global, 0, 2, 253, 4, 0x86, field, 1, 0x02]);
     d.push(0x00);
     d.extend_from_slice(&1_000_000_000u32.to_le_bytes());
     d.push(140);
@@ -123,6 +133,9 @@ impl Source for Fake {
             .unwrap()
             .push(("wellness".to_owned(), date.to_owned()));
         Ok(wellness_fit())
+    }
+    async fn devices(&self, _s: &Session) -> Result<Value, ClientError> {
+        Ok(json!([{"deviceId": WATCH, "productDisplayName": "test watch", "productSku": "010-1"}]))
     }
 }
 
@@ -431,4 +444,108 @@ db_test!(a_wellness_download_is_kept_with_its_readings, |f| {
         .unwrap();
     // Every fake day holds the same reading, so it is stored once.
     assert_eq!(readings, vec![("heart_rate".to_owned(), 140.0)]);
+});
+
+db_test!(a_wellness_file_records_the_watch_that_wrote_it, |f| {
+    let fake = Fake {
+        activities: vec![act_days_ago(1, 2)],
+        ..Default::default()
+    };
+    let mut runner = Runner::new(
+        f.pool.clone(),
+        "owner".into(),
+        2000,
+        fake,
+        seed_session(false),
+    );
+    backfill_until_stopped(&mut runner).await;
+    let devices: Vec<Option<i64>> =
+        sqlx::query_scalar("SELECT DISTINCT device_id FROM wellness_file")
+            .fetch_all(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(devices, vec![Some(WATCH as i64)]);
+    let sample: Option<i64> = sqlx::query_scalar("SELECT device_id FROM wellness_sample")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(sample, Some(WATCH as i64));
+});
+
+db_test!(a_poll_archives_the_registry_and_names_the_device, |f| {
+    let mut on_watch = act(31);
+    on_watch["deviceId"] = json!(WATCH);
+    let fake = Fake {
+        activities: vec![on_watch, act(32)],
+        ..Default::default()
+    };
+    let mut runner = Runner::new(
+        f.pool.clone(),
+        "owner".into(),
+        2000,
+        fake,
+        seed_session(false),
+    );
+    runner.pass().await.unwrap();
+    let names: Vec<(i64, Option<String>)> =
+        garmin_core::store::activities::list(&f.pool, None, None, None, 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|a| (a.id, a.device))
+            .collect();
+    assert!(
+        names.contains(&(31, Some("test watch".to_owned()))),
+        "{names:?}"
+    );
+    assert!(
+        names.contains(&(32, None)),
+        "no device stays unnamed: {names:?}"
+    );
+    let devices = garmin_core::store::devices::list(&f.pool).await.unwrap();
+    assert_eq!(devices.len(), 1);
+    assert_eq!(devices[0].product_sku.as_deref(), Some("010-1"));
+});
+
+db_test!(stored_wellness_days_are_linked_to_their_watch, |f| {
+    // A day stored before devices were linked: no device on the file or its reading.
+    sqlx::query("INSERT INTO wellness_file (date, bytes) VALUES ('2026-01-01', $1)")
+        .bind(wellness_fit())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO wellness_sample (kind, ts, value) \
+         VALUES ('heart_rate', '2021-09-08T01:46:40Z', 140)",
+    )
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    let runner = Runner::new(
+        f.pool.clone(),
+        "owner".into(),
+        2000,
+        Fake::default(),
+        seed_session(false),
+    );
+    assert_eq!(runner.relink_wellness().await.unwrap(), 1);
+    assert_eq!(
+        runner.relink_wellness().await.unwrap(),
+        0,
+        "nothing left to link"
+    );
+    let file: Option<i64> = sqlx::query_scalar("SELECT device_id FROM wellness_file")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    let sample: Vec<Option<i64>> = sqlx::query_scalar("SELECT device_id FROM wellness_sample")
+        .fetch_all(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(file, Some(WATCH as i64));
+    assert_eq!(
+        sample,
+        vec![Some(WATCH as i64)],
+        "the same reading, now linked"
+    );
 });

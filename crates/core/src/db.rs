@@ -33,6 +33,10 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         "0003_wellness.sql",
         include_str!("../../../db-migrations/pg/0003_wellness.sql"),
     ),
+    (
+        "0004_device.sql",
+        include_str!("../../../db-migrations/pg/0004_device.sql"),
+    ),
 ];
 
 const SCHEMA_MIGRATION_DDL: &str = "

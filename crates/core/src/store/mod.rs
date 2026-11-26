@@ -2,6 +2,7 @@
 
 pub mod activities;
 pub mod daily;
+pub mod devices;
 pub mod raw;
 pub mod samples;
 pub mod session;

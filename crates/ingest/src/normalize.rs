@@ -1,7 +1,7 @@
 //! Turn Garmin payloads into archive rows. Pure functions over `serde_json::Value`.
 
 use chrono::{DateTime, NaiveDateTime, Utc};
-use garmin_core::models::Activity;
+use garmin_core::models::{Activity, Device};
 use serde_json::Value;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -54,5 +54,23 @@ pub fn activity(v: &Value) -> Result<Activity, ShapeError> {
                     .map(str::to_owned)
             }),
         summary: v.clone(),
+    })
+}
+
+/// One device from the registry (`device-service/deviceregistration/devices`); `None`
+/// without a deviceId.
+pub fn device(v: &Value) -> Option<Device> {
+    let text = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+    let id = v.get("deviceId")?;
+    Some(Device {
+        id: id.as_i64().or_else(|| id.as_str()?.parse().ok())?,
+        display_name: text("productDisplayName").or_else(|| text("displayName")),
+        product_sku: text("productSku"),
+        part_number: text("partNumber"),
+        application_key: text("applicationKey"),
+        registered_at: v
+            .get("registeredDate")
+            .and_then(Value::as_i64)
+            .and_then(DateTime::from_timestamp_millis),
     })
 }
